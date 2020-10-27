@@ -51,13 +51,13 @@ def createTrainingsamples(numberSamples, spatialRefinement,
 
 
 def createCollocationPoints(nSamples, spatialRefinement, temporalRefinement):
-    xSamples = np.linspace(0 + 1. / spatialRefinement,
-                           2. * np.pi - 1. / spatialRefinement,
+    xSamples = np.linspace(0,
+                           2. * np.pi,
                            spatialRefinement,
                            endpoint=False,
                            dtype=np.float32)
-    tSamples = np.linspace(0 + 1. / temporalRefinement,
-                           0.5 - 1. / temporalRefinement,
+    tSamples = np.linspace(0.,
+                           0.5,
                            temporalRefinement,
                            endpoint=False,
                            dtype=np.float32)
@@ -111,9 +111,10 @@ def residual(trainingData):
     return dtU + dxUSquare
 
 
-dimIn, dimHiddenOne, dimHiddenTwo, dimHiddenThree, dimHiddenFour, dimOut, nSamples = 2, 5, 5, 5, 5, 1, 100
+dimIn, dimHiddenOne, dimHiddenTwo, dimHiddenThree, dimHiddenFour, dimOut, nSamples, nSamplesResidual \
+     = 2, 5, 5, 5, 5, 1, 100, 1000
 trainingData, yTrue = createTrainingsamples(nSamples, 1000, 1000)
-collocationData = createCollocationPoints(1000, 1000, 1000)
+collocationData = createCollocationPoints(nSamplesResidual, 1000, 1000)
 
 lossFunction = torch.nn.MSELoss(reduction='sum')
 
@@ -135,9 +136,8 @@ else:
         shuffeledList = list(range(2 * nSamples))
         random.shuffle(shuffeledList)
         for sample in shuffeledList:
-            randomSample = np.random.randint(0, 2 * nSamples)
-            yPrediction = model(trainingData[randomSample, :])
-            loss = lossFunction(yPrediction, yTrue[randomSample])
+            yPrediction = model(trainingData[sample, :])
+            loss = lossFunction(yPrediction, yTrue[sample])
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -152,14 +152,14 @@ else:
         "/media/fm/2881fd19-010f-4d7b-a148-a8973130f331/fabian/pytorch_coding/PINN/model.pt"
     )
 
-residualErrors = np.zeros(1000)
-nSamplesResidual = 1000
+residualErrors = np.zeros(100)
 
 for iterations in range(100):
     epochLoss = 0.
-    for sample in range(nSamplesResidual):
-        randomSample = np.random.randint(0, nSamplesResidual)
-        yPrediction = residual(collocationData[randomSample, :])
+    shuffeledList = list(range(nSamplesResidual))
+    random.shuffle(shuffeledList)
+    for sample in shuffeledList:
+        yPrediction = residual(collocationData[sample, :])
         optimizer.zero_grad()
         yTrue = torch.zeros(1)[0]
         lossResidual = lossFunction(yPrediction, yTrue)
