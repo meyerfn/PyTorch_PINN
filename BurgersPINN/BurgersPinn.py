@@ -5,173 +5,146 @@ import os
 
 
 def exactInitialCondition(x):
-    return 1. - np.cos(x)
+    return np.sin(x)
 
 
-def createTrainingsamples(numberSamples, spatialRefinement,
-                          temporalRefinement):
+def createTrainingsamples(nSamples):
     xSamples = np.linspace(0,
                            2. * np.pi,
-                           spatialRefinement,
-                           endpoint=False,
+                           nSamples,
+                           endpoint=True,
                            dtype=np.float32)
-    tSamples = np.linspace(0,
-                           0.5,
-                           temporalRefinement,
-                           endpoint=False,
-                           dtype=np.float32)
+    np.random.shuffle(xSamples)
+    tSamples = np.linspace(0, 1.0, nSamples, endpoint=True, dtype=np.float32)
+    np.random.shuffle(tSamples)
+
     initialT = 0.
     xLeftBoundary = 0.
     xRightBoundary = 2. * np.pi
 
-    initialConditionSamples = np.zeros(shape=(numberSamples, 2),
-                                       dtype=np.float32)
+    initialConditionSamples = np.zeros(shape=(nSamples, 2), dtype=np.float32)
     initialConditionSamples[:, 0] = initialT
-    initialConditionSamples[:, 1] = xSamples[np.random.randint(
-        0, spatialRefinement, numberSamples)]
-    trueInitialcondition = exactInitialCondition(initialConditionSamples[:, 1])
+    initialConditionSamples[:, 1] = xSamples
 
-    boundaryConditionSamples = np.zeros(shape=(numberSamples, 2),
-                                        dtype=np.float32)
-    boundaryConditionSamples[:, 0] = tSamples[np.random.randint(
-        0, temporalRefinement, numberSamples)]
+    boundaryConditionSamples = np.zeros(shape=(nSamples, 2), dtype=np.float32)
+    boundaryConditionSamples[:, 0] = tSamples
     boundaryConditionSamples[:, 1] = random.choices(
-        [xLeftBoundary, xRightBoundary], k=numberSamples)
+        [xLeftBoundary, xRightBoundary], k=nSamples)
 
+    trueInitialcondition = exactInitialCondition(initialConditionSamples[:, 1])
+    trueBoundaryData = np.zeros(nSamples,dtype=np.float32)
     trainingData = np.append(initialConditionSamples,
                              boundaryConditionSamples,
                              axis=0)
     trainingData = torch.from_numpy(trainingData)
     trainingData.requires_grad = True
-    referenceData = np.append(trueInitialcondition,
-                              np.zeros(numberSamples, dtype=np.float32),
-                              axis=0)
+
+    referenceData = np.append(trueInitialcondition, trueBoundaryData, axis=0)
     referenceData = torch.from_numpy(referenceData)
     return trainingData, referenceData
 
 
-def createCollocationPoints(nSamples, spatialRefinement, temporalRefinement):
+def createCollocationPoints(nSamples):
     xSamples = np.linspace(0,
                            2. * np.pi,
-                           spatialRefinement,
+                           nSamples,
                            endpoint=False,
                            dtype=np.float32)
-    tSamples = np.linspace(0.,
-                           0.5,
-                           temporalRefinement,
-                           endpoint=False,
-                           dtype=np.float32)
+    np.random.shuffle(xSamples)
+    tSamples = np.linspace(0., 1.0, nSamples, endpoint=False, dtype=np.float32)
+    np.random.shuffle(tSamples)
+
     collocationPoints = np.zeros(shape=(nSamples, 2), dtype=np.float32)
-    collocationPoints[:, 0] = random.choices(tSamples, k=nSamples)
-    collocationPoints[:, 1] = random.choices(xSamples, k=nSamples)
+
+    collocationPoints[:, 0] = tSamples
+    collocationPoints[:, 1] = xSamples
+
     collocationtrainingData = torch.from_numpy(collocationPoints)
     collocationtrainingData.requires_grad = True
     return collocationtrainingData
 
 
-# simple feedforward net with 4 hidden layers and tanh activation function
+# simple feedforward net with 5 hidden layers and tanh activation function
 class FFN(torch.nn.Module):
-    def __init__(self, dimIn, dimHiddenOne, dimHiddenTwo, dimHiddenThree,
-                 dimHiddenFour, dimOut):
+    def __init__(self, dimIn, dimHidden, dimOut, numberHiddenLayers):
         super(FFN, self).__init__()
-        self.input = torch.nn.Linear(dimIn, dimHiddenOne)
-        self.hiddenOne = torch.nn.Linear(dimHiddenOne, dimHiddenTwo)
-        self.hiddenTwo = torch.nn.Linear(dimHiddenTwo, dimHiddenThree)
-        self.hiddenThree = torch.nn.Linear(dimHiddenThree, dimHiddenFour)
-        self.hiddenFour = torch.nn.Linear(dimHiddenFour, dimOut)
+        self.input = torch.nn.Linear(dimIn, dimHidden)
+        self.hidden = torch.nn.Linear(dimHidden, dimHidden)
+        self.hiddenToOutput = torch.nn.Linear(dimHidden, dimOut)
         self.output = torch.nn.Linear(dimOut, 1)
-        self.activation = torch.nn.Tanh()
+        self.activation = torch.nn.CELU()
 
     def forward(self, trainingData):
-        inputToHidden = self.input(trainingData)
-        hiddenOneToHiddenTwo = self.hiddenOne(self.activation(inputToHidden))
-        hiddenTwoToHiddenThree = self.hiddenTwo(
-            self.activation(hiddenOneToHiddenTwo))
-        hiddenThreeToHiddenfour = self.hiddenThree(
-            self.activation(hiddenTwoToHiddenThree))
-        hiddenFourToOutput = self.hiddenFour(
-            self.activation(hiddenThreeToHiddenfour))
-        yPrediction = self.output(hiddenFourToOutput)
+        outputFromInputLayer = self.activation(self.input(trainingData))
+        for i in range(numberHiddenLayers - 1):
+            outputFromHiddenLayer = self.activation(
+                self.hidden(outputFromInputLayer))
+        outputFromHiddenLayer = self.activation(
+            self.hiddenToOutput(outputFromHiddenLayer))
+        yPrediction = self.output(outputFromHiddenLayer)
         return yPrediction
 
+    def residual(self, trainingData):
+        u = model(trainingData)
+        gradient = torch.autograd.grad(outputs=u,
+                                       inputs=trainingData,
+                                       grad_outputs=torch.ones_like(u),
+                                       create_graph=True,
+                                       allow_unused=True)[0]
+        dtU = gradient[:, 0]
+        uSquare = 0.5 * u * u
+        gradientSquared = torch.autograd.grad(
+            outputs=uSquare,
+            inputs=trainingData,
+            grad_outputs=torch.ones_like(uSquare),
+            create_graph=True,
+            allow_unused=True)[0]
+        dxFlux = gradientSquared[:, 1]
+        return dtU + dxFlux
 
-def residual(trainingData):
-    u = model(trainingData)
-    gradient = torch.autograd.grad(u,
-                                   trainingData,
-                                   create_graph=True,
-                                   allow_unused=True)
-    dtU = gradient[0][0]
-    uSquare = 0.5 * u * u
-    gradientUSquare = torch.autograd.grad(uSquare,
-                                          trainingData,
-                                          create_graph=True,
-                                          allow_unused=True)
-    dxUSquare = gradientUSquare[0][1]
-    return dtU + dxUSquare
 
+dimIn, dimHidden, dimOut, numberHiddenLayers = 2, 20, 1, 5
+batchSize, batchSizeCollocation, nSamples, nSamplesResidual = 20, 100, 400, 20000
 
-dimIn, dimHiddenOne, dimHiddenTwo, dimHiddenThree, dimHiddenFour, dimOut, nSamples, nSamplesResidual \
-     = 2, 5, 5, 5, 5, 1, 100, 1000
-trainingData, yTrue = createTrainingsamples(nSamples, 1000, 1000)
-collocationData = createCollocationPoints(nSamplesResidual, 1000, 1000)
+trainingData, trueOutput = createTrainingsamples(nSamples)
+collocationData = createCollocationPoints(nSamplesResidual)
 
-lossFunction = torch.nn.MSELoss(reduction='sum')
+lossFunction = torch.nn.MSELoss()
+model = FFN(dimIn, dimHidden, dimOut, numberHiddenLayers)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
+# optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
+epochErrors = np.zeros(1000)
 
-if (os.path.isfile(
-        "/media/fm/2881fd19-010f-4d7b-a148-a8973130f331/fabian/pytorch_coding/PINN/model.pt"
-)):
-    model = torch.load(
-        "/media/fm/2881fd19-010f-4d7b-a148-a8973130f331/fabian/pytorch_coding/PINN/model.pt"
-    )
-    model.eval()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
-else:
-    model = FFN(dimIn, dimHiddenOne, dimHiddenTwo, dimHiddenThree,
-                dimHiddenFour, dimOut)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
-    modelErrors = np.zeros(500)
-    for iterations in range(500):
-        epochLoss = 0.
-        shuffeledList = list(range(2 * nSamples))
-        random.shuffle(shuffeledList)
-        for sample in shuffeledList:
-            yPrediction = model(trainingData[sample, :])
-            loss = lossFunction(yPrediction, yTrue[sample])
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            epochLoss += loss.item()
-
-        print("Epoch: {0}, Loss :{1}".format(iterations, epochLoss))
-        modelErrors[iterations] = epochLoss
-    np.savetxt("modelErrors.txt", modelErrors)
-
-    torch.save(
-        model,
-        "/media/fm/2881fd19-010f-4d7b-a148-a8973130f331/fabian/pytorch_coding/PINN/model.pt"
-    )
-
-residualErrors = np.zeros(100)
-
-for iterations in range(100):
+for iterations in range(1000):
     epochLoss = 0.
-    shuffeledList = list(range(nSamplesResidual))
+    shuffeledList = list(range(int(nSamples/batchSize)))
     random.shuffle(shuffeledList)
-    for sample in shuffeledList:
-        yPrediction = residual(collocationData[sample, :])
+    for i in shuffeledList:
+        uPrediction = model(trainingData[i * batchSize:(i + 1) * batchSize, :])
+        lossU = lossFunction(uPrediction[:, 0],
+                             trueOutput[i * batchSize:(i + 1) * batchSize])
+        residualPrediction = model.residual(
+            collocationData[i * batchSizeCollocation:(i + 1) *
+                            batchSizeCollocation, :])
+        trueResidual = torch.zeros(batchSizeCollocation)
+        lossResidual = lossFunction(trueResidual, residualPrediction)
+        combinedLoss = lossU + lossResidual
+
         optimizer.zero_grad()
-        yTrue = torch.zeros(1)[0]
-        lossResidual = lossFunction(yPrediction, yTrue)
-        lossResidual.backward(retain_graph=True)
+        combinedLoss.backward()
         optimizer.step()
-        epochLoss += lossResidual.item()
+
+        epochLoss += combinedLoss.item()
 
     print("Epoch: {0}, Loss :{1}".format(iterations, epochLoss))
-    residualErrors[iterations] = epochLoss
-np.savetxt("ResidualErrors.txt", residualErrors)
-
+    epochErrors[iterations] = epochLoss
+    if (np.mod(iterations, 100) == 0):
+        torch.save(
+            model,
+            "/media/fm/2881fd19-010f-4d7b-a148-a8973130f331/fabian/pytorch_coding/PINN/BurgersPINN/plot/fullModel{0}.pt"
+            .format(iterations))
+np.savetxt("modelErrors.txt", epochErrors)
 torch.save(
-    model,
-    "/media/fm/2881fd19-010f-4d7b-a148-a8973130f331/fabian/pytorch_coding/PINN/fullBurgers.pt"
-)
+            model,
+            "/media/fm/2881fd19-010f-4d7b-a148-a8973130f331/fabian/pytorch_coding/PINN/BurgersPINN/plot/fullModel.pt"
+            .format(iterations))
